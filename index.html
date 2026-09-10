@@ -193,9 +193,10 @@
     <div class="total" id="grandTotal">€0.00</div>
   </div>
 
-  <p class="hint no-print" style="margin-top:18px;">
-    Data is saved only in this browser on this device. Use <strong>Export</strong> each month to keep a copy.
+  <p class="hint no-print" style="margin-top:18px;" id="storageNote">
+    Checking connection…
   </p>
+  <p class="hint no-print" style="margin-top:4px; opacity:.7;">Build v4 · sync</p>
 </div>
 
 <script>
@@ -353,6 +354,7 @@
     cacheLocally();
     render();
     setSync(isConflict ? "reloaded" : "synced");
+    storageNote("Synced to your Supabase account. The same data shows on every device you sign in on.");
     if (isConflict) {
       alert("This tracker was changed on another device, so the newer version was loaded. Please redo your last edit.");
     }
@@ -931,15 +933,29 @@
   const msgEl   = document.getElementById("loginMsg");
 
   function showError(m) { errEl.textContent = m; errEl.classList.remove("hidden"); }
-  function showGate(on)  { gate.classList.toggle("hidden", !on); }
+  function showGate(on) {
+    gate.classList.toggle("hidden", !on);
+    if (on) {
+      setSync("signed out");
+      storageNote("Sign in to load and sync your lessons.");
+    }
+  }
 
   // Offline or misconfigured: fall back to the local copy so the app still opens.
+  function storageNote(text) {
+    const el = document.getElementById("storageNote");
+    if (el) el.innerHTML = text;
+  }
+
   function runOffline(why) {
     sb = null;
     loadCache();
     showGate(false);
     render();
     setSync(why, true);
+    storageNote(why === "local only"
+      ? "<strong>Not syncing.</strong> The online library did not load, so this is saving to this browser only. Reload while online to sync."
+      : "<strong>Offline.</strong> Saving to this browser only. Changes made now are NOT uploaded. Use <strong>Export</strong> to keep a copy.");
   }
 
   // First sign-in on a device that already has months of data: push it up rather
@@ -959,6 +975,7 @@
                   "Upload this device's data and start syncing from it?")) {
         await push();
         setSync("uploaded");
+        storageNote("Uploaded from this device. Synced to your Supabase account from now on.");
         render();
         return;
       }
@@ -968,6 +985,7 @@
     cacheLocally();
     render();
     setSync("synced");
+    storageNote("Synced to your Supabase account. The same data shows on every device you sign in on.");
   }
 
   async function start(session) {
@@ -992,9 +1010,22 @@
   const hadLocal = loadCache();   // parse the cache first so we can offer to upload it
   render();                       // paint something immediately
 
-  if (!window.supabase || !cfg.url || !cfg.anonKey) {
-    runOffline("local only");
-  } else {
+  // The library comes from a CDN. On a flaky mobile connection that request can
+  // fail, and without this the app would quietly run local-only and look exactly
+  // like the old version. Try a second host before giving up.
+  function ensureSupabase() {
+    if (window.supabase) return Promise.resolve(true);
+    return new Promise(resolve => {
+      const alt = document.createElement("script");
+      alt.src = "https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js";
+      alt.onload  = () => resolve(!!window.supabase);
+      alt.onerror = () => resolve(false);
+      setTimeout(() => resolve(!!window.supabase), 8000);
+      document.head.appendChild(alt);
+    });
+  }
+
+  function startAuth() {
     sb = window.supabase.createClient(cfg.url, cfg.anonKey);
 
     loginEl.onsubmit = async (ev) => {
@@ -1026,6 +1057,13 @@
     sb.auth.getSession().then(({ data: { session } }) => {
       if (session) start(session); else showGate(true);
     }).catch(() => runOffline("offline"));
+  }
+
+  if (!cfg.url || !cfg.anonKey) {
+    runOffline("local only");
+  } else {
+    setSync("connecting…");
+    ensureSupabase().then(ok => ok ? startAuth() : runOffline("local only"));
   }
 })();
 </script>
