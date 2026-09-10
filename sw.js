@@ -1,6 +1,6 @@
 // Simple offline cache for Coaches Tracker.
 // Bump CACHE when you change index.html so phones pick up the new version.
-const CACHE = "coaches-tracker-v4";
+const CACHE = "coaches-tracker-v5";
 const ASSETS = [
   "./",
   "./index.html",

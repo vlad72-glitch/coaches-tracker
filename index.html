@@ -88,6 +88,8 @@
   input.note { width: 100%; min-width: 90px; }
   .reason-sel { font-size: .85rem; }
   .row-dim { opacity: .55; }
+  .row-del { color: var(--muted); padding: 2px 6px; margin-left: 6px; opacity: .5; }
+  .row-del:hover { opacity: 1; color: var(--bad); background: var(--bad-bg); }
   .extra-section { margin-top: 14px; }
   .extra-section h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 6px; }
   .extra-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px dashed var(--line); }
@@ -196,7 +198,7 @@
   <p class="hint no-print" style="margin-top:18px;" id="storageNote">
     Checking connection…
   </p>
-  <p class="hint no-print" style="margin-top:4px; opacity:.7;">Build v4 · sync</p>
+  <p class="hint no-print" style="margin-top:4px; opacity:.7;">Build v5 · sync</p>
 </div>
 
 <script>
@@ -644,6 +646,25 @@
     note.type = "text"; note.className = "note"; note.placeholder = "—"; note.value = e.note || "";
     note.onchange = () => { e.note = note.value; save(); };
     tdNote.appendChild(note);
+
+    // Only offer delete on a row the schedule no longer covers. Deleting a lesson
+    // the slot still generates would regenerate it on the next render, so the
+    // button would do nothing. To drop a scheduled lesson, mark it Cancelled.
+    const orphan = !slot || !slot.weekdays.includes(dowOf(e.date));
+    if (orphan) {
+      const del = document.createElement("button");
+      del.className = "ghost row-del no-print";
+      del.textContent = "\u2715";
+      del.title = "Delete this leftover lesson";
+      del.onclick = () => {
+        const when = prettyDate(e.date) + (e.time ? " at " + e.time : "");
+        if (!confirm("Delete " + coach.name + "'s lesson on " + when + "?\n\nThis one is left over from a schedule you have since changed. It cannot be undone.")) return;
+        const mo = data.months[curKey];
+        mo.entries = mo.entries.filter(x => x.id !== e.id);
+        save(); render();
+      };
+      tdNote.appendChild(del);
+    }
     tr.appendChild(tdNote);
 
     return tr;
@@ -821,7 +842,9 @@
         const last = coach.slots[coach.slots.length - 1];
         coach.slots.push({
           id: uid(),
-          weekdays: last ? [...last.weekdays] : [1],
+          weekdays: [],          // no days on purpose: nothing is generated until
+                                 // a day is ticked, so adding a slot can never
+                                 // quietly create lessons on a day already worked
           start: last ? last.end : "18:00",
           end: last ? addHour(last.end) : "19:00",
           hours: last ? last.hours : 1
