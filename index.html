@@ -12,6 +12,8 @@
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
 <title>Coaches Tracker</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
 <style>
   :root {
     --bg: #f4f5f7;
@@ -66,6 +68,15 @@
   .lessons tr:last-child td { border-bottom: none; }
   .date-cell { white-space: nowrap; }
   .date-cell .dow { color: var(--muted); font-size: .82rem; margin-left: 6px; }
+  .coach-edit { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
+  .coach-edit-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .coach-edit-top .lbl { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .slot-edit { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 0; border-top: 1px dashed var(--line); }
+  .slot-edit .lbl { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .slot-actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .dow-picker { display: flex; flex-wrap: wrap; gap: 2px 8px; max-width: 230px; }
+  .dow-picker label { display: inline-flex; align-items: center; gap: 3px; font-size: .82rem; white-space: nowrap; cursor: pointer; }
+  .dow-picker input { margin: 0; }
   .status-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
   .status-toggle button { border: none; border-radius: 0; padding: 4px 12px; font-size: .85rem; background: transparent; color: var(--muted); }
   .status-toggle button.on-good { background: var(--good-bg); color: var(--good); font-weight: 600; }
@@ -105,6 +116,14 @@
   .hidden { display: none !important; }
   .hint { color: var(--muted); font-size: .85rem; margin-top: 6px; }
   .print-only { display: none; }
+  .login-gate { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+  .login-box { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px; width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 10px; }
+  .login-box h2 { margin: 0; font-size: 1.15rem; }
+  .login-box p { margin: 0; font-size: .88rem; }
+  .login-box input { font: inherit; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; }
+  .login-err { color: var(--bad); }
+  .sync-pill { font-size: .78rem; color: var(--muted); padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); white-space: nowrap; }
+  .sync-pill.bad { color: var(--bad); border-color: var(--bad); }
 
   @media (max-width: 640px) {
     .lessons, .lessons thead, .lessons tbody, .lessons th, .lessons td, .lessons tr { display: block; }
@@ -125,6 +144,17 @@
 </style>
 </head>
 <body>
+<div id="loginGate" class="login-gate hidden">
+  <form class="login-box" id="loginForm">
+    <h2>🏊 Coaches Tracker</h2>
+    <p class="muted" id="loginMsg">Sign in to load your lessons.</p>
+    <input type="email" id="loginEmail" placeholder="email" autocomplete="username" required>
+    <input type="password" id="loginPass" placeholder="password" autocomplete="current-password" required>
+    <button type="submit" class="primary" id="loginBtn">Sign in</button>
+    <p class="login-err hidden" id="loginErr"></p>
+  </form>
+</div>
+
 <div class="wrap">
   <header class="app">
     <h1>🏊 Coaches Tracker</h1>
@@ -138,18 +168,15 @@
       <button id="settingsBtn">⚙ Settings</button>
       <button id="exportBtn">⬇ Export</button>
       <button id="printBtn" class="ghost">🖨 Print</button>
+      <span class="sync-pill" id="syncPill">·</span>
+      <button id="signOutBtn" class="ghost">Sign out</button>
     </div>
   </header>
 
   <section class="settings hidden no-print" id="settingsPanel">
     <h2>Coaches</h2>
-    <div class="hint">Edit names, hourly rates, and the weekly lesson slot. Changes apply to every month (already-logged hours per lesson are kept).</div>
-    <table>
-      <thead>
-        <tr><th>Name</th><th>Rate (€/h)</th><th>Weekday</th><th>Start</th><th>End</th><th>Lesson hrs</th><th></th></tr>
-      </thead>
-      <tbody id="settingsRows"></tbody>
-    </table>
+    <div class="hint">Edit names, hourly rates, and the weekly lesson slots. A coach can have several slots, so two lessons on the same day or different times on different days both work. Changes apply to every month (already-logged hours are kept).</div>
+    <div id="settingsRows"></div>
     <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
       <button id="addCoachBtn">+ Add coach</button>
       <button id="closeSettingsBtn" class="primary">Done</button>
@@ -186,31 +213,166 @@
   function defaultData() {
     return {
       coaches: [
-        { id: uid(), name: "Anahi",  rate: 35, weekday: 1, start: "18:30", end: "19:30", durationHours: 1 },
-        { id: uid(), name: "Kesler", rate: 30, weekday: 6, start: "16:00", end: "17:00", durationHours: 1 },
+        { id: uid(), name: "Mobina", rate: 30, slots: [
+            { id: uid(), weekdays: [1, 4], start: "18:30", end: "19:30", hours: 1 },
+          ] },
+        { id: uid(), name: "Kesler", rate: 30, slots: [
+            { id: uid(), weekdays: [6], start: "16:00", end: "17:00", hours: 1 },
+            { id: uid(), weekdays: [6], start: "17:00", end: "18:00", hours: 1 },
+          ] },
       ],
       months: {}
     };
   }
 
+  // The coach shape has changed twice. Oldest: a single `weekday` plus one
+  // start/end/durationHours. Then: a `weekdays` array, still one time slot.
+  // Now: a `slots` list, each slot with its own days, so a coach can teach twice
+  // on the same day, or at different times on different days. Old saved data is
+  // upgraded in place on load, and doing it twice is harmless.
+  function cleanDays(arr) {
+    if (!Array.isArray(arr)) return [];
+    return [...new Set(arr.filter(d => Number.isInteger(d) && d >= 0 && d <= 6))].sort();
+  }
+  function normalizeCoach(c) {
+    if (!Array.isArray(c.slots)) {
+      const days = Array.isArray(c.weekdays) ? c.weekdays
+                 : (typeof c.weekday === "number" ? [c.weekday] : []);
+      c.slots = [{
+        id: uid(),
+        weekdays: cleanDays(days),
+        start: c.start || "18:00",
+        end: c.end || "19:00",
+        hours: Number(c.durationHours) > 0 ? Number(c.durationHours) : 1
+      }];
+    }
+    c.slots.forEach(sl => {
+      if (!sl.id) sl.id = uid();
+      sl.weekdays = cleanDays(sl.weekdays);
+      sl.start = sl.start || "18:00";
+      sl.end = sl.end || "19:00";
+      sl.hours = Number(sl.hours) > 0 ? Number(sl.hours) : 1;
+    });
+    c.slots.sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
+    delete c.weekday; delete c.weekdays;
+    delete c.start; delete c.end; delete c.durationHours;
+    return c;
+  }
+  function addHour(hhmm) {
+    const [h, mi] = String(hhmm || "18:00").split(":").map(Number);
+    const t = ((isNaN(h) ? 18 : h) + 1) % 24;
+    return String(t).padStart(2, "0") + ":" + String(isNaN(mi) ? 0 : mi).padStart(2, "0");
+  }
+  function slotById(coach, slotId) {
+    return coach ? coach.slots.find(sl => sl.id === slotId) : null;
+  }
+  function dayLabel(weekdays, short) {
+    if (!weekdays.length) return "no day set";
+    const names = weekdays.map(d => (short ? DOW_SHORT : DOW)[d]);
+    if (names.length === 1) return names[0];
+    return names.slice(0, -1).join(", ") + " & " + names[names.length - 1];
+  }
+  function slotLabel(sl) {
+    return dayLabel(sl.weekdays, sl.weekdays.length > 1) + " " + sl.start + "\u2013" + sl.end;
+  }
+  function coachScheduleLabel(coach) {
+    if (!coach.slots.length) return "no lessons scheduled";
+    return coach.slots.map(slotLabel).join(" \u00b7 ");
+  }
+
   // ---------- storage ----------
   let data;
-  function load() {
+  // Load the local cache. Used offline, and as the source for the one-time
+  // upload of data that predates syncing.
+  function loadCache() {
     try {
       const raw = localStorage.getItem(LS_KEY);
-      if (raw) {
-        data = JSON.parse(raw);
-        if (!data || !Array.isArray(data.coaches) || typeof data.months !== "object") data = defaultData();
-      } else {
-        data = defaultData();
+      data = raw ? JSON.parse(raw) : null;
+    } catch (e) { data = null; }
+    const had = !!data;
+    normalizeLoaded();
+    return had;
+  }
+  // ---------- cloud storage ----------
+  // The whole tracker is one JSON document in ct_state. Writes are debounced and
+  // sent with the updated_at we last saw, so a write from another device cannot
+  // be silently clobbered: the update matches no row and we reload instead.
+  const cfg = window.CTRACK_CONFIG || {};
+  let sb = null, seenAt = null, pushTimer = null, pushing = false, again = false;
+  const pill = () => document.getElementById("syncPill");
+  function setSync(text, bad) {
+    const el = pill(); if (!el) return;
+    el.textContent = text;
+    el.classList.toggle("bad", !!bad);
+  }
+
+  function cacheLocally() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch (e) {}
+  }
+
+  function save() {
+    cacheLocally();                       // instant local copy, also the offline fallback
+    if (!sb) return;
+    setSync("saving…");
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(push, 600);    // collapse rapid edits into one write
+  }
+
+  async function push() {
+    if (!sb) return;
+    if (pushing) { again = true; return; }
+    pushing = true;
+    try {
+      let q = sb.from("ct_state").update({ doc: data }).eq("id", "singleton");
+      if (seenAt) q = q.eq("updated_at", seenAt);
+      const { data: rows, error } = await q.select("updated_at");
+      if (error) throw error;
+      if (!rows || !rows.length) {        // someone else wrote first
+        setSync("reloading…", true);
+        await pull(true);
+        return;
       }
+      seenAt = rows[0].updated_at;
+      setSync("saved");
     } catch (e) {
-      data = defaultData();
+      setSync("offline", true);
+      console.warn("save failed", e);
+    } finally {
+      pushing = false;
+      if (again) { again = false; push(); }
     }
   }
-  function save() {
-    try { localStorage.setItem(LS_KEY, JSON.stringify(data)); }
-    catch (e) { alert("Could not save data: " + e.message); }
+
+  async function pull(isConflict) {
+    const { data: row, error } = await sb.from("ct_state")
+      .select("doc, updated_at").eq("id", "singleton").single();
+    if (error) throw error;
+    seenAt = row.updated_at;
+    data = row.doc && Array.isArray(row.doc.coaches) ? row.doc : defaultData();
+    normalizeLoaded();
+    cacheLocally();
+    render();
+    setSync(isConflict ? "reloaded" : "synced");
+    if (isConflict) {
+      alert("This tracker was changed on another device, so the newer version was loaded. Please redo your last edit.");
+    }
+  }
+
+  // shared clean-up applied to whatever we loaded, cloud or cache
+  function normalizeLoaded() {
+    if (!data || !Array.isArray(data.coaches) || typeof data.months !== "object") data = defaultData();
+    data.coaches.forEach(normalizeCoach);
+    Object.values(data.months || {}).forEach(mo => {
+      (mo.entries || []).forEach(e => {
+        if (e.type !== "regular") return;
+        const c = data.coaches.find(x => x.id === e.coachId);
+        if (!e.slotId && c && c.slots.length) e.slotId = c.slots[0].id;
+        if (!e.time) {
+          const sl = c ? c.slots.find(x => x.id === e.slotId) : null;
+          if (sl) e.time = sl.start;
+        }
+      });
+    });
   }
 
   // ---------- date helpers ----------
@@ -241,18 +403,38 @@
     const { y, m } = parseMonthKey(key);
     const daysInMonth = new Date(y, m + 1, 0).getDate();
     data.coaches.forEach(c => {
-      for (let d = 1; d <= daysInMonth; d++) {
-        if (new Date(y, m, d).getDay() === c.weekday) {
+      c.slots.forEach(sl => {
+        for (let d = 1; d <= daysInMonth; d++) {
+          if (!sl.weekdays.includes(new Date(y, m, d).getDay())) continue;
           const dateStr = ymd(y, m, d);
-          const exists = month.entries.some(e => e.type === "regular" && e.coachId === c.id && e.date === dateStr);
+          const exists = month.entries.some(e =>
+            e.type === "regular" && e.coachId === c.id && e.slotId === sl.id && e.date === dateStr);
           if (!exists) {
             month.entries.push({
-              id: uid(), date: dateStr, coachId: c.id, type: "regular",
-              hours: c.durationHours || 1, done: true, cancelReason: null, note: ""
+              id: uid(), date: dateStr, coachId: c.id, slotId: sl.id, type: "regular",
+              time: sl.start, hours: sl.hours, done: true, cancelReason: null, note: ""
             });
           }
         }
-      }
+      });
+    });
+
+    // If a coach stops working a day, the lessons already generated for it would
+    // otherwise linger and keep being charged. Drop those, but ONLY when they are
+    // still untouched auto-generated rows dated today or later: anything edited
+    // (hours changed, note written, marked cancelled) and anything in the past is
+    // real history and is always kept.
+    const todayStr = ymd(now.getFullYear(), now.getMonth(), now.getDate());
+    month.entries = month.entries.filter(e => {
+      if (e.type !== "regular") return true;
+      if (e.date < todayStr) return true;
+      const c = data.coaches.find(x => x.id === e.coachId);
+      if (!c) return true;
+      const sl = slotById(c, e.slotId);
+      if (sl && sl.weekdays.includes(dowOf(e.date))) return true;
+      const untouched = e.done === true && !e.cancelReason && !e.note &&
+                        (!sl || e.hours === sl.hours);
+      return !untouched;
     });
   }
 
@@ -261,9 +443,12 @@
   function entriesFor(key, coachId, type) {
     const month = data.months[key];
     if (!month) return [];
+    const coach = data.coaches.find(c => c.id === coachId);
+    const timeOf = e => e.time || (slotById(coach, e.slotId) || {}).start || "";
     return month.entries
       .filter(e => e.coachId === coachId && (!type || e.type === type))
-      .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1
+                       : timeOf(a) < timeOf(b) ? -1 : timeOf(a) > timeOf(b) ? 1 : 0));
   }
 
   function coachTotals(key, coach) {
@@ -308,7 +493,7 @@
         '<span class="meta"></span>';
       head.querySelector(".name").textContent = coach.name;
       head.querySelector(".meta").textContent =
-        eur(coach.rate) + "/h · " + DOW[coach.weekday] + " " + coach.start + "–" + coach.end;
+        eur(coach.rate) + "/h · " + coachScheduleLabel(coach);
       card.appendChild(head);
 
       // regular lessons table
@@ -320,7 +505,7 @@
       const regs = entriesFor(curKey, coach.id, "regular");
       if (regs.length === 0) {
         const tr = document.createElement("tr");
-        tr.innerHTML = '<td colspan="4" class="muted">No lessons on ' + DOW[coach.weekday] + 's this month.</td>';
+        tr.innerHTML = '<td colspan="4" class="muted">No lessons scheduled this month.</td>';
         tbody.appendChild(tr);
       }
       regs.forEach(e => tbody.appendChild(lessonRow(coach, e)));
@@ -391,7 +576,10 @@
     tdDate.setAttribute("data-label", "Date");
     tdDate.innerHTML = '<strong></strong><span class="dow"></span>';
     tdDate.querySelector("strong").textContent = prettyDate(e.date);
-    tdDate.querySelector(".dow").textContent = DOW_SHORT[dowOf(e.date)];
+    const slot = slotById(coach, e.slotId);
+    const showTime = e.time && (coach.slots.length > 1 || !slot);
+    tdDate.querySelector(".dow").textContent =
+      DOW_SHORT[dowOf(e.date)] + (showTime ? " " + e.time : "");
     tr.appendChild(tdDate);
 
     // status
@@ -526,61 +714,123 @@
   function renderSettings() {
     settingsRows.innerHTML = "";
     data.coaches.forEach(coach => {
-      const tr = document.createElement("tr");
+      const box = document.createElement("div");
+      box.className = "coach-edit";
 
-      const tdName = document.createElement("td");
+      // --- name, rate, remove coach ---
+      const top = document.createElement("div");
+      top.className = "coach-edit-top";
+
+      const nLbl = document.createElement("span"); nLbl.className = "lbl"; nLbl.textContent = "Name";
       const nIn = document.createElement("input");
       nIn.type = "text"; nIn.className = "cname"; nIn.value = coach.name;
       nIn.onchange = () => { coach.name = nIn.value.trim() || "Coach"; nIn.value = coach.name; save(); render(); };
-      tdName.appendChild(nIn); tr.appendChild(tdName);
 
-      const tdRate = document.createElement("td");
+      const rLbl = document.createElement("span"); rLbl.className = "lbl"; rLbl.textContent = "Rate €/h";
       const rIn = document.createElement("input");
       rIn.type = "number"; rIn.className = "crate"; rIn.min = "0"; rIn.step = "0.5"; rIn.value = coach.rate;
       rIn.onchange = () => { let v = parseFloat(rIn.value); if (isNaN(v) || v < 0) v = 0; coach.rate = v; rIn.value = v; save(); render(); };
-      tdRate.appendChild(rIn); tr.appendChild(tdRate);
 
-      const tdDow = document.createElement("td");
-      const dSel = document.createElement("select");
-      DOW.forEach((name, idx) => {
-        const o = document.createElement("option");
-        o.value = idx; o.textContent = name;
-        if (idx === coach.weekday) o.selected = true;
-        dSel.appendChild(o);
-      });
-      dSel.onchange = () => { coach.weekday = parseInt(dSel.value, 10); save(); render(); };
-      tdDow.appendChild(dSel); tr.appendChild(tdDow);
-
-      const tdStart = document.createElement("td");
-      const sIn = document.createElement("input");
-      sIn.type = "time"; sIn.className = "ctime"; sIn.value = coach.start;
-      sIn.onchange = () => { coach.start = sIn.value || coach.start; sIn.value = coach.start; save(); render(); };
-      tdStart.appendChild(sIn); tr.appendChild(tdStart);
-
-      const tdEnd = document.createElement("td");
-      const eIn = document.createElement("input");
-      eIn.type = "time"; eIn.className = "ctime"; eIn.value = coach.end;
-      eIn.onchange = () => { coach.end = eIn.value || coach.end; eIn.value = coach.end; save(); render(); };
-      tdEnd.appendChild(eIn); tr.appendChild(tdEnd);
-
-      const tdDur = document.createElement("td");
-      const durIn = document.createElement("input");
-      durIn.type = "number"; durIn.style.width = "60px"; durIn.min = "0"; durIn.step = "0.25"; durIn.value = coach.durationHours;
-      durIn.onchange = () => { let v = parseFloat(durIn.value); if (isNaN(v) || v <= 0) v = 1; coach.durationHours = v; durIn.value = v; save(); render(); };
-      tdDur.appendChild(durIn); tr.appendChild(tdDur);
-
-      const tdDel = document.createElement("td");
       const del = document.createElement("button");
-      del.className = "ghost"; del.textContent = "✕ remove";
+      del.className = "ghost"; del.textContent = "✕ remove coach";
+      del.style.marginLeft = "auto";
       del.onclick = () => {
         if (!confirm("Remove " + coach.name + "? Their logged lessons in all months will also be removed.")) return;
         data.coaches = data.coaches.filter(c => c.id !== coach.id);
         Object.values(data.months).forEach(mo => { mo.entries = mo.entries.filter(en => en.coachId !== coach.id); });
         save(); renderSettings(); render();
       };
-      tdDel.appendChild(del); tr.appendChild(tdDel);
+      top.append(nLbl, nIn, rLbl, rIn, del);
+      box.appendChild(top);
 
-      settingsRows.appendChild(tr);
+      // --- one editable row per weekly slot ---
+      coach.slots.forEach(sl => {
+        const row = document.createElement("div");
+        row.className = "slot-edit";
+
+        const dWrap = document.createElement("div");
+        dWrap.className = "dow-picker";
+        DOW_SHORT.forEach((name, idx) => {
+          const lab = document.createElement("label");
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.checked = sl.weekdays.includes(idx);
+          cb.onchange = () => {
+            const set = new Set(sl.weekdays);
+            cb.checked ? set.add(idx) : set.delete(idx);
+            sl.weekdays = [...set].sort();
+            // no renderSettings() here: rebuilding would detach the checkbox
+            // mid-click and drop focus. The box shows its own state.
+            save(); render();
+          };
+          lab.appendChild(cb);
+          lab.appendChild(document.createTextNode(name));
+          dWrap.appendChild(lab);
+        });
+        row.appendChild(dWrap);
+
+        const sIn = document.createElement("input");
+        sIn.type = "time"; sIn.className = "ctime"; sIn.value = sl.start;
+        sIn.onchange = () => {
+          const old = sl.start;
+          sl.start = sIn.value || sl.start; sIn.value = sl.start;
+          // keep untouched future lessons in step with the slot they came from
+          const todayStr = ymd(now.getFullYear(), now.getMonth(), now.getDate());
+          Object.values(data.months).forEach(mo => mo.entries.forEach(en => {
+            if (en.slotId === sl.id && en.date >= todayStr && en.time === old) en.time = sl.start;
+          }));
+          save(); render();
+        };
+
+        const dash = document.createElement("span"); dash.className = "lbl"; dash.textContent = "to";
+
+        const eIn = document.createElement("input");
+        eIn.type = "time"; eIn.className = "ctime"; eIn.value = sl.end;
+        eIn.onchange = () => { sl.end = eIn.value || sl.end; eIn.value = sl.end; save(); render(); };
+
+        const hLbl = document.createElement("span"); hLbl.className = "lbl"; hLbl.textContent = "hrs";
+        const hIn = document.createElement("input");
+        hIn.type = "number"; hIn.style.width = "60px"; hIn.min = "0"; hIn.step = "0.25"; hIn.value = sl.hours;
+        hIn.onchange = () => { let v = parseFloat(hIn.value); if (isNaN(v) || v <= 0) v = 1; sl.hours = v; hIn.value = v; save(); render(); };
+
+        const sDel = document.createElement("button");
+        sDel.className = "ghost"; sDel.textContent = "✕";
+        sDel.title = "Remove this slot";
+        sDel.style.marginLeft = "auto";
+        sDel.onclick = () => {
+          if (coach.slots.length === 1) {
+            alert("A coach needs at least one slot. Remove the coach instead, or change the days on this one.");
+            return;
+          }
+          if (!confirm("Remove the " + slotLabel(sl) + " slot? Lessons already logged for it in past months are kept.")) return;
+          coach.slots = coach.slots.filter(x => x.id !== sl.id);
+          save(); renderSettings(); render();
+        };
+
+        row.append(sIn, dash, eIn, hLbl, hIn, sDel);
+        box.appendChild(row);
+      });
+
+      const acts = document.createElement("div");
+      acts.className = "slot-actions";
+      const addSlot = document.createElement("button");
+      addSlot.textContent = "+ Add slot";
+      addSlot.onclick = () => {
+        const last = coach.slots[coach.slots.length - 1];
+        coach.slots.push({
+          id: uid(),
+          weekdays: last ? [...last.weekdays] : [1],
+          start: last ? last.end : "18:00",
+          end: last ? addHour(last.end) : "19:00",
+          hours: last ? last.hours : 1
+        });
+        normalizeCoach(coach);
+        save(); renderSettings(); render();
+      };
+      acts.appendChild(addSlot);
+      box.appendChild(acts);
+
+      settingsRows.appendChild(box);
     });
   }
 
@@ -590,7 +840,9 @@
   };
   document.getElementById("closeSettingsBtn").onclick = () => { settingsPanel.classList.add("hidden"); };
   document.getElementById("addCoachBtn").onclick = () => {
-    data.coaches.push({ id: uid(), name: "New coach", rate: 30, weekday: 1, start: "18:00", end: "19:00", durationHours: 1 });
+    data.coaches.push(normalizeCoach({ id: uid(), name: "New coach", rate: 30, slots: [
+      { id: uid(), weekdays: [1], start: "18:00", end: "19:00", hours: 1 }
+    ] }));
     save(); renderSettings(); render();
   };
   document.getElementById("resetAllBtn").onclick = () => {
@@ -620,7 +872,7 @@
   document.getElementById("exportBtn").onclick = () => {
     ensureMonth(curKey);
     const label = monthName(curKey);
-    const rows = [["Coach", "Type", "Date", "Weekday", "Status", "Reason", "Hours", "Rate", "Pay", "Note"]];
+    const rows = [["Coach", "Type", "Date", "Weekday", "Time", "Status", "Reason", "Hours", "Rate", "Pay", "Note"]];
     let grand = 0;
     let textLines = ["Coaches payout — " + label, ""];
     data.coaches.forEach(coach => {
@@ -630,8 +882,10 @@
         const reason = e.done ? "" : (e.cancelReason || "");
         const hours = e.done ? (Number(e.hours) || 0) : 0;
         const pay = hours * (Number(coach.rate) || 0);
+        const slot = slotById(coach, e.slotId);
         rows.push([
-          coach.name, e.type, e.date, DOW[dowOf(e.date)], status, reason,
+          coach.name, e.type, e.date, DOW[dowOf(e.date)],
+          e.time || (slot ? slot.start : ""), status, reason,
           String(hours), String(coach.rate), pay.toFixed(2), (e.note || "")
         ]);
       });
@@ -643,7 +897,7 @@
     });
     textLines.push("", "GRAND TOTAL: " + eur(grand));
     rows.push([]);
-    rows.push(["", "", "", "", "", "", "", "", "GRAND TOTAL", eur(grand)]);
+    rows.push(["", "", "", "", "", "", "", "", "", "GRAND TOTAL", eur(grand)]);
 
     // CSV download
     const csv = rows.map(r => r.map(cell => {
@@ -671,8 +925,108 @@
   };
 
   // ---------- boot ----------
-  load();
-  render();
+  const gate    = document.getElementById("loginGate");
+  const loginEl = document.getElementById("loginForm");
+  const errEl   = document.getElementById("loginErr");
+  const msgEl   = document.getElementById("loginMsg");
+
+  function showError(m) { errEl.textContent = m; errEl.classList.remove("hidden"); }
+  function showGate(on)  { gate.classList.toggle("hidden", !on); }
+
+  // Offline or misconfigured: fall back to the local copy so the app still opens.
+  function runOffline(why) {
+    sb = null;
+    loadCache();
+    showGate(false);
+    render();
+    setSync(why, true);
+  }
+
+  // First sign-in on a device that already has months of data: push it up rather
+  // than letting an empty cloud document overwrite it.
+  async function firstSyncFrom(localHadData) {
+    const { data: row, error } = await sb.from("ct_state")
+      .select("doc, updated_at").eq("id", "singleton").single();
+    if (error) throw error;
+    seenAt = row.updated_at;
+    const cloud = row.doc || {};
+    const cloudEmpty = !Array.isArray(cloud.coaches) || cloud.coaches.length === 0;
+
+    if (cloudEmpty && localHadData) {
+      const n = Object.keys(data.months || {}).length;
+      if (confirm("This device has " + data.coaches.length + " coach(es) and " + n +
+                  " month(s) saved locally, and the online copy is empty.\n\n" +
+                  "Upload this device's data and start syncing from it?")) {
+        await push();
+        setSync("uploaded");
+        render();
+        return;
+      }
+    }
+    data = cloudEmpty ? (localHadData ? data : defaultData()) : cloud;
+    normalizeLoaded();
+    cacheLocally();
+    render();
+    setSync("synced");
+  }
+
+  async function start(session) {
+    showGate(false);
+    setSync("loading…");
+    try {
+      await firstSyncFrom(hadLocal);
+    } catch (e) {
+      console.warn(e);
+      // Signed in but the read failed: RLS not set up, or the project is paused.
+      const m = String(e && e.message || e);
+      if (/JSON object requested|0 rows|single/i.test(m)) {
+        showGate(true);
+        showError("Signed in, but this account is not in ct_owners yet, so it cannot see the data. Add your user id in the SQL editor, then reload.");
+        await sb.auth.signOut();
+      } else {
+        runOffline("offline");
+      }
+    }
+  }
+
+  const hadLocal = loadCache();   // parse the cache first so we can offer to upload it
+  render();                       // paint something immediately
+
+  if (!window.supabase || !cfg.url || !cfg.anonKey) {
+    runOffline("local only");
+  } else {
+    sb = window.supabase.createClient(cfg.url, cfg.anonKey);
+
+    loginEl.onsubmit = async (ev) => {
+      ev.preventDefault();
+      errEl.classList.add("hidden");
+      const btn = document.getElementById("loginBtn");
+      btn.disabled = true; btn.textContent = "Signing in…";
+      const { error } = await sb.auth.signInWithPassword({
+        email: document.getElementById("loginEmail").value.trim(),
+        password: document.getElementById("loginPass").value
+      });
+      btn.disabled = false; btn.textContent = "Sign in";
+      if (error) { showError(error.message); return; }
+      document.getElementById("loginPass").value = "";
+    };
+
+    document.getElementById("signOutBtn").onclick = async () => {
+      clearTimeout(pushTimer);
+      await sb.auth.signOut();
+      seenAt = null;
+      showGate(true);
+      msgEl.textContent = "Signed out. Sign in to load your lessons.";
+    };
+
+    sb.auth.onAuthStateChange((_evt, session) => {
+      if (session) start(session); else showGate(true);
+    });
+
+    sb.auth.getSession().then(({ data: { session } }) => {
+      if (session) start(session); else showGate(true);
+    }).catch(() => runOffline("offline"));
+  }
 })();
 </script>
 <script>
